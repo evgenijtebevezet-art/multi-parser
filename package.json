@@ -1,0 +1,30 @@
+{
+  "name": "china-content-bank",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.1.3",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "scout": "tsx src/scout/run.ts",
+    "banker": "tsx src/banker/run.ts",
+    "editor": "tsx src/scripts/editorPick.ts",
+    "init-db": "tsx src/scripts/initDb.ts",
+    "seed": "tsx src/scripts/seedTheme.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@libsql/client": "^0.14.0",
+    "@google/genai": "^0.10.0",
+    "googleapis": "^144.0.0",
+    "zod": "^3.23.8",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}
