@@ -13,6 +13,7 @@
     "editor": "tsx src/scripts/editorPick.ts",
     "init-db": "tsx src/scripts/initDb.ts",
     "seed": "tsx src/scripts/seedTheme.ts",
+    "reader:demo": "tsx src/scripts/readerDemo.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
