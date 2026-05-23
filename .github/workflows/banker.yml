@@ -1,7 +1,7 @@
 name: banker
 on:
   schedule:
-    - cron: '47 6 * * *'   # 06:47 UTC daily — 90 min after scout
+    - cron: '47 6 * * *'
   workflow_dispatch:
     inputs:
       max_themes:
@@ -19,13 +19,9 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 11.1.3
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: pnpm
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -36,7 +32,7 @@ jobs:
           sudo apt-get update -y && sudo apt-get install -y ffmpeg
           yt-dlp --version
           ffmpeg -version | head -1
-      - run: pnpm install --frozen-lockfile=false
+      - run: npm install --no-audit --no-fund
       - name: Run banker
         env:
           TURSO_URL: ${{ secrets.TURSO_URL }}
@@ -49,9 +45,9 @@ jobs:
           CONTENT_BANK_VIDEOS_DIR: ./data/videos
         run: |
           if [ "${{ inputs.dry_run }}" = "true" ]; then
-            pnpm banker -- --max-themes ${{ inputs.max_themes || '5' }} --dry-run
+            npx tsx src/banker/run.ts --max-themes ${{ inputs.max_themes || '5' }} --dry-run
           else
-            pnpm banker -- --max-themes ${{ inputs.max_themes || '5' }}
+            npx tsx src/banker/run.ts --max-themes ${{ inputs.max_themes || '5' }}
           fi
       - name: Upload banker artifacts
         if: always()

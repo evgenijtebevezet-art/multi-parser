@@ -1,7 +1,7 @@
 name: scout
 on:
   schedule:
-    - cron: '17 5 * * *'   # 05:17 UTC daily
+    - cron: '17 5 * * *'
   workflow_dispatch:
     inputs:
       allow_fallback_seed:
@@ -15,14 +15,10 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 11.1.3
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile=false
+      - run: npm install --no-audit --no-fund
       - name: Run scout
         env:
           TURSO_URL: ${{ secrets.TURSO_URL }}
@@ -32,9 +28,9 @@ jobs:
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
         run: |
           if [ "${{ inputs.allow_fallback_seed }}" = "true" ]; then
-            pnpm scout -- --allow-fallback-seed
+            npx tsx src/scout/run.ts --allow-fallback-seed
           else
-            pnpm scout
+            npx tsx src/scout/run.ts
           fi
       - name: Upload scout artifacts
         if: always()
