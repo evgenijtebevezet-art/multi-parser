@@ -1,0 +1,46 @@
+name: scout
+on:
+  schedule:
+    - cron: '17 5 * * *'   # 05:17 UTC daily
+  workflow_dispatch:
+    inputs:
+      allow_fallback_seed:
+        description: 'Use hardcoded seed if LLM cascade fails'
+        type: boolean
+        default: false
+
+jobs:
+  scout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.1.3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile=false
+      - name: Run scout
+        env:
+          TURSO_URL: ${{ secrets.TURSO_URL }}
+          TURSO_TOKEN: ${{ secrets.TURSO_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+        run: |
+          if [ "${{ inputs.allow_fallback_seed }}" = "true" ]; then
+            pnpm scout -- --allow-fallback-seed
+          else
+            pnpm scout
+          fi
+      - name: Upload scout artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scout-${{ github.run_id }}
+          path: runs/**/scout/*.json
+          if-no-files-found: ignore
+          retention-days: 14
