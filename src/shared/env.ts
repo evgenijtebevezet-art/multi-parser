@@ -11,6 +11,8 @@ const Env = z.object({
   CONTENT_BANK_VIDEOS_DIR: z.string().default('./data/videos'),
   YOUTUBE_API_KEY: z.string().optional(),
   GDRIVE_SA_JSON: z.string().optional(),
+  REDDIT_ENABLED: z.string().optional(),
+  REDDIT_SUBREDDITS: z.string().optional(),
 });
 
 export const env = Env.parse(process.env);
