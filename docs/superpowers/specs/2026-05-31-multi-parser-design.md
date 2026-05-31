@@ -257,16 +257,20 @@ banker/run.ts(domain, maxThemes)
            return result.topic_match >= 5 AND !result.is_slideshow
     6. for candidate in thumbApproved.slice(0, 3):
          try:
-           localPath = videoSource.downloadVideo(candidate.url, outPath)
-           visionResult = fullVisionCheck(localPath, theme)
+           // Stage A: partial download for full-vision (cheaper bandwidth)
+           partialPath = videoSource.downloadVideo(candidate.url, outPath, { sections: '*0-30' })
+           visionResult = fullVisionCheck(partialPath, theme)
              extract 5 frames via ffmpeg -ss N -frames:v 1
              callLlmCascade(CASCADE_VISION_FULL, { images: frames })
              return { quality_score, action_density, vozduhanstvo, category, passes }
+           safeUnlink(partialPath)
+
            if visionResult.passes:
+             // Stage B: full download for downstream consumers
+             localPath = videoSource.downloadVideo(candidate.url, outPath)
              gdriveId = storage.upload(localPath, key)
              insertCandidate({ ..., quality_score, gdrive_file_id })
-           else:
-             safeUnlink(localPath)
+
          except: log + continue
 ```
 
@@ -364,6 +368,8 @@ CREATE TABLE discovery_signals (
   UNIQUE(domain, source, signal_hash)
 );
 CREATE INDEX discovery_signals_seen_idx ON discovery_signals(domain, seen_at DESC);
+-- TTL: scout/run.ts runs DELETE FROM discovery_signals WHERE seen_at < datetime('now', '-30 days')
+-- at the end of every successful run, capping table size.
 ```
 
 ### 9.3 Seed migration
@@ -397,7 +403,7 @@ Bootstrap subreddits and keyword_bank with curated initial values per domain. Ap
 - **Download failure** — try/catch per candidate. Continue to next.
 - **DB failure** — fatal. Run marked `error` in `runs` table.
 - **Vision failure** — falls through cascade. If all vision models fail, candidate skipped (NOT inserted with NULL score).
-- **GDrive failure** — log warn, falls back to local path stored in `local_path`. Run does NOT fail.
+- **GDrive failure** — **FATAL**. Run marked `error`. Rationale: downstream bots are pull-only and would silently see 0 new videos if upload fails but DB row inserted with `local_path` only. Better to fail the run loud than degrade silently.
 
 ## 12. Observability
 
@@ -414,10 +420,14 @@ The multi-parser is considered "production-ready" for handoff to tech-shorts wor
 1. `init-db.yml` successfully creates all new tables and indexes on Turso.
 2. For each of the 3 domains, `scout.yml --dry-run` returns 5+ themes whose `niche` is valid for that domain.
 3. For each of the 3 domains, `banker.yml --max-themes=1` inserts at least 1 candidate with `quality_score >= 4` into the DB and `gdrive_file_id IS NOT NULL`.
-4. Claude downloads one candidate per domain via `gh run download` and validates relevance via TWO independent Vision API calls:
-   - Qwen3.5-397B via NVIDIA NIM with prompt: `Rate this video 1-10 for relevance to theme "<theme.title>" and action density. Return JSON.`
-   - Gemini Flash-Lite Files API with the same prompt.
-   Both calls must return `quality >= 4 AND action >= 4 AND is_slideshow=false`.
+4. New CLI command `npm run validate:e2e -- --domain X` runs automatically per domain:
+   - Picks one fresh candidate from DB.
+   - Re-downloads from `gdrive_file_id` to a temp file.
+   - Sends 5 frames to Qwen3.5-397B via NVIDIA NIM with relevance + quality prompt.
+   - Sends same 5 frames to Gemini Flash-Lite Vision with the same prompt.
+   - Asserts both return `quality >= 4 AND action >= 4 AND is_slideshow=false`.
+   - Exits 0 on pass, non-zero on fail. Logs full vision responses for review.
+   Claude runs this command per domain after banker E2E and reports.
 5. Memory updated to reflect new state.
 6. Spec, plan, and PRs ready for review.
 
