@@ -32,6 +32,22 @@ jobs:
           sudo apt-get update -y && sudo apt-get install -y ffmpeg
           yt-dlp --version
           ffmpeg -version | head -1
+      - name: Materialize Bilibili cookies
+        env:
+          BILI_COOKIES_B64: ${{ secrets.BILI_COOKIES_B64 }}
+        run: |
+          if [ -z "${BILI_COOKIES_B64:-}" ]; then
+            echo "::warning::BILI_COOKIES_B64 secret not set — yt-dlp will run without Bilibili cookies"
+            exit 0
+          fi
+          printf '%s' "$BILI_COOKIES_B64" | base64 -d > "$RUNNER_TEMP/bili_cookies.txt"
+          chmod 600 "$RUNNER_TEMP/bili_cookies.txt"
+          echo "BILI_COOKIES_FILE=$RUNNER_TEMP/bili_cookies.txt" >> "$GITHUB_ENV"
+          for marker in buvid3 buvid4 b_nut _uuid buvid_fp; do
+            if ! grep -q "$marker" "$RUNNER_TEMP/bili_cookies.txt"; then
+              echo "::warning::Bilibili cookie marker '$marker' missing"
+            fi
+          done
       - run: npm install --no-audit --no-fund
       - name: Run banker
         env:
