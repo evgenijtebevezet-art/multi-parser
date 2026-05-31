@@ -6,8 +6,15 @@ Rules:
 - Avoid: politics, military, crypto, gambling, scams, gaming livestreams
 - Niche must be one of: "ev" | "smartphone" | "robot" | "smart_home" | "drone" | "wearable" | "general"`;
 
-export function buildUserPrompt(date: string): string {
-  return `Today is ${date}. Use google_search grounding to find what is HOT in Chinese tech right now (within the last 14 days). Return JSON with shape:
+export function buildUserPrompt(date: string, redditSignals: string[] = []): string {
+  const signalsBlock =
+    redditSignals.length > 0
+      ? `\nReal trending Reddit posts from the last week (use as HINTS — keep only ones fitting Chinese tech / EV / robot / gadget topics, ignore the rest):\n${redditSignals
+          .map((s, i) => `${i + 1}. ${s}`)
+          .join('\n')}\n`
+      : '';
+  return `Today is ${date}. Use google_search grounding${redditSignals.length > 0 ? ' and the Reddit signals below' : ''} to find what is HOT in Chinese tech right now (within the last 14 days).
+${signalsBlock}Return JSON with shape:
 {
   "themes": [
     {
