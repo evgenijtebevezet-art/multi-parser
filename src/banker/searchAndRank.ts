@@ -59,7 +59,15 @@ function dedupByVideoId(results: SearchResult[]): SearchResult[] {
 }
 
 function passesPrefilter(r: SearchResult): boolean {
-  if (r.duration_seconds < MIN_DURATION_S || r.duration_seconds > MAX_DURATION_S) return false;
+  // duration/view_count are frequently absent (0) from --flat-playlist search results
+  // (notably Bilibili), so only reject when the value is KNOWN and out of range —
+  // otherwise every Bilibili candidate is dropped before it can be ranked/downloaded.
+  if (
+    r.duration_seconds > 0 &&
+    (r.duration_seconds < MIN_DURATION_S || r.duration_seconds > MAX_DURATION_S)
+  ) {
+    return false;
+  }
   if (r.view_count > 0 && r.view_count < MIN_VIEW_COUNT) return false;
   return true;
 }
