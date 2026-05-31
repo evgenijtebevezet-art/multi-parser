@@ -4,6 +4,8 @@ data/*.db
 data/*.db-journal
 data/videos/
 runs/
+research/
+*_dump.json
 .env
 .env.local
 *.log
