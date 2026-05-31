@@ -1,9 +1,29 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { createReadStream, statSync } from 'node:fs';
+import { createReadStream, existsSync, statSync } from 'node:fs';
 import { log } from './logger.js';
 
 export type SearchPlatform = 'bilibili' | 'douyin' | 'youtube';
+
+function bilibiliExtraArgs(): string[] {
+  const cookiesFile = process.env.BILI_COOKIES_FILE?.trim();
+  const args: string[] = [
+    '--add-header',
+    'Referer:https://www.bilibili.com/',
+    '--add-header',
+    'Origin:https://www.bilibili.com',
+    '--add-header',
+    'Accept-Language:zh-CN,zh;q=0.9,en;q=0.8',
+  ];
+  if (cookiesFile && existsSync(cookiesFile)) {
+    args.unshift('--cookies', cookiesFile);
+  }
+  return args;
+}
+
+function isBilibiliUrl(url: string): boolean {
+  return /bilibili\.com|b23\.tv/i.test(url);
+}
 
 export type SearchResult = {
   source_platform: 'bilibili' | 'douyin' | 'xiaohongshu' | 'youtube';
@@ -109,7 +129,11 @@ export async function searchVideos(opts: {
   const { platform, query, maxResults } = opts;
   if (maxResults <= 0) return [];
   const { target, effectivePlatform } = buildSearchTarget(platform, query, maxResults);
-  const args = ['--dump-json', '--no-warnings', '--skip-download', '--flat-playlist', target];
+  const args = ['--dump-json', '--no-warnings', '--skip-download', '--flat-playlist'];
+  if (effectivePlatform === 'bilibili') {
+    args.push(...bilibiliExtraArgs());
+  }
+  args.push(target);
 
   const t0 = Date.now();
   log('info', 'ytdlp.search', { platform, effectivePlatform, query, maxResults });
@@ -170,8 +194,11 @@ export async function downloadVideo(
     'mp4',
     '--no-warnings',
     '--no-playlist',
-    url,
   ];
+  if (isBilibiliUrl(url)) {
+    args.push(...bilibiliExtraArgs());
+  }
+  args.push(url);
 
   const t0 = Date.now();
   log('info', 'ytdlp.download', { url, outPath });
