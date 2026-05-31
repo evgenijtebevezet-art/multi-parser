@@ -6,6 +6,7 @@ import { log, setLogContext } from '../shared/logger.js';
 import { insertScoutRun, finishRun, insertThemes, type ThemeInput } from '../shared/repositories.js';
 import { callLlmCascade, CASCADE_SCOUT, type LlmResult } from '../shared/llmFallback.js';
 import { SYSTEM_PROMPT, buildUserPrompt } from './prompts.js';
+import { fetchRedditTrending } from '../shared/reddit.js';
 import { ScoutResponseSchema, SCOUT_JSON_SCHEMA, type ScoutResponse } from './schema.js';
 
 const DRY_RUN = process.argv.includes('--dry-run');
@@ -72,8 +73,20 @@ async function getScoutResponse(): Promise<{ response: ScoutResponse; llm: LlmRe
     log('info', 'scout.dry_run', { themes: MOCK_RESPONSE.themes.length });
     return { response: MOCK_RESPONSE, llm: null };
   }
+  let redditSignals: string[] = [];
+  if (env.REDDIT_ENABLED !== 'false') {
+    try {
+      const signals = await fetchRedditTrending();
+      redditSignals = signals.map((s) => `[r/${s.subreddit} ${s.score}^] ${s.title}`);
+      log('info', 'scout.reddit_signals', { count: redditSignals.length });
+    } catch (e) {
+      log('warn', 'scout.reddit_failed', {
+        error: e instanceof Error ? e.message.slice(0, 200) : String(e),
+      });
+    }
+  }
   const llm = await callLlmCascade(CASCADE_SCOUT, {
-    prompt: buildUserPrompt(todayIso()),
+    prompt: buildUserPrompt(todayIso(), redditSignals),
     systemPrompt: SYSTEM_PROMPT,
     responseFormat: 'json',
     jsonSchema: SCOUT_JSON_SCHEMA,

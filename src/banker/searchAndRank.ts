@@ -15,9 +15,15 @@ const MIN_VIEW_COUNT = 1000;
 const MAX_QUERIES_PER_THEME = 4;
 const SEARCH_PLATFORMS: SearchPlatform[] = ['bilibili', 'youtube'];
 const SEARCH_MAX_RESULTS = 5;
-const VISION_TOP_N = 8;
+// Evaluate top-by-views per platform so Bilibili candidates are never starved out
+// by YouTube's higher view counts. Bilibili download works on CI (cookies+headers);
+// YouTube download is blocked on datacenter IPs (bot-check), so keep fewer of it.
+const EVAL_TOP_BILIBILI = 6;
+const EVAL_TOP_YOUTUBE = 4;
 const QUALITY_SCORE_MIN = 0.4;
-const TOP_AFTER_FILTER = 2;
+// Return several ranked candidates (Bilibili first) so the banker has working
+// fallbacks when a given download is blocked.
+const TOP_AFTER_FILTER = 5;
 
 export type RankedCandidate = SearchResult & {
   quality_score: number;
@@ -53,7 +59,15 @@ function dedupByVideoId(results: SearchResult[]): SearchResult[] {
 }
 
 function passesPrefilter(r: SearchResult): boolean {
-  if (r.duration_seconds < MIN_DURATION_S || r.duration_seconds > MAX_DURATION_S) return false;
+  // duration/view_count are frequently absent (0) from --flat-playlist search results
+  // (notably Bilibili), so only reject when the value is KNOWN and out of range —
+  // otherwise every Bilibili candidate is dropped before it can be ranked/downloaded.
+  if (
+    r.duration_seconds > 0 &&
+    (r.duration_seconds < MIN_DURATION_S || r.duration_seconds > MAX_DURATION_S)
+  ) {
+    return false;
+  }
   if (r.view_count > 0 && r.view_count < MIN_VIEW_COUNT) return false;
   return true;
 }
@@ -92,20 +106,24 @@ async function visionFilter(candidate: SearchResult, theme: Theme): Promise<Filt
 }
 
 function heuristicScore(c: SearchResult, theme: Theme): FilterResponse {
+  // The candidate already came back from a TARGETED keyword search for this theme,
+  // so it is topically relevant by construction. Exact title-substring matching is
+  // unreliable for Chinese titles (it over-rejected real Bilibili hits), so we no
+  // longer hard-reject on it — we just bias quality toward keyword hits + popularity.
   let hits = 0;
   for (const kw of theme.cn_keywords) {
     if (kw && c.title.includes(kw)) hits++;
   }
   const titleHit = theme.title.length > 0 && c.title.includes(theme.title);
-  const relevant = hits > 0 || titleHit;
   const popularity = Math.min(1, Math.log10(Math.max(c.view_count, 10)) / 7);
-  const quality = relevant ? Math.max(0.45, popularity * 0.8 + 0.2) : 0.2;
+  const relevanceBoost = hits > 0 || titleHit ? 0.1 : 0;
+  const quality = Math.min(1, Math.max(0.45, popularity * 0.8 + 0.2 + relevanceBoost));
   return {
-    relevant,
+    relevant: true,
     quality_score: quality,
     has_watermark: false,
     language_cn: true,
-    reason: 'bilibili-heuristic',
+    reason: hits > 0 || titleHit ? 'search-match+title' : 'search-match',
   };
 }
 
@@ -147,9 +165,14 @@ export async function searchAcrossPlatforms(theme: Theme): Promise<RankedCandida
     after_prefilter: prefiltered.length,
   });
 
-  const topByViews = [...prefiltered]
-    .sort((a, b) => b.view_count - a.view_count)
-    .slice(0, VISION_TOP_N);
+  const byViews = (platform: SearchResult['source_platform']): SearchResult[] =>
+    prefiltered
+      .filter((c) => c.source_platform === platform)
+      .sort((a, b) => b.view_count - a.view_count);
+  const topByViews = [
+    ...byViews('bilibili').slice(0, EVAL_TOP_BILIBILI),
+    ...byViews('youtube').slice(0, EVAL_TOP_YOUTUBE),
+  ];
 
   const evaluated: RankedCandidate[] = [];
   for (const cand of topByViews) {
@@ -185,6 +208,13 @@ export async function searchAcrossPlatforms(theme: Theme): Promise<RankedCandida
     });
   }
 
-  evaluated.sort((a, b) => b.quality_score - a.quality_score);
+  // Bilibili first (its download succeeds on CI), then by quality. This stops the
+  // banker from wasting all its attempts on YouTube URLs that 403 on datacenter IPs.
+  evaluated.sort((a, b) => {
+    const ap = a.source_platform === 'bilibili' ? 0 : 1;
+    const bp = b.source_platform === 'bilibili' ? 0 : 1;
+    if (ap !== bp) return ap - bp;
+    return b.quality_score - a.quality_score;
+  });
   return evaluated.slice(0, TOP_AFTER_FILTER);
 }
