@@ -5,6 +5,16 @@ import { log } from './logger.js';
 
 export type SearchPlatform = 'bilibili' | 'douyin' | 'youtube';
 
+/**
+ * Optional proxy for ALL yt-dlp calls. Set YTDLP_PROXY (e.g. socks5://127.0.0.1:7890)
+ * to route search + download through a VPN/residential exit. On CI this is the mihomo
+ * local port; unset locally/by default → direct connection (no behaviour change).
+ */
+function proxyArgs(): string[] {
+  const proxy = process.env.YTDLP_PROXY?.trim();
+  return proxy ? ['--proxy', proxy] : [];
+}
+
 function bilibiliExtraArgs(): string[] {
   const cookiesFile = process.env.BILI_COOKIES_FILE?.trim();
   const args: string[] = [
@@ -129,7 +139,7 @@ export async function searchVideos(opts: {
   const { platform, query, maxResults } = opts;
   if (maxResults <= 0) return [];
   const { target, effectivePlatform } = buildSearchTarget(platform, query, maxResults);
-  const args = ['--dump-json', '--no-warnings', '--skip-download', '--flat-playlist'];
+  const args = ['--dump-json', '--no-warnings', '--skip-download', '--flat-playlist', ...proxyArgs()];
   if (effectivePlatform === 'bilibili') {
     args.push(...bilibiliExtraArgs());
   }
@@ -194,6 +204,7 @@ export async function downloadVideo(
     'mp4',
     '--no-warnings',
     '--no-playlist',
+    ...proxyArgs(),
   ];
   if (isBilibiliUrl(url)) {
     args.push(...bilibiliExtraArgs());
