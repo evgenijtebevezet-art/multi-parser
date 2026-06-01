@@ -133,3 +133,59 @@ export async function fetchRedditTrending(opts?: {
   });
   return top;
 }
+
+export interface RedditVideoHit {
+  permalink: string;
+  title: string;
+  score: number;
+}
+
+/**
+ * Search Reddit for VIDEO posts matching a query (theme keywords). Reddit has no
+ * yt-dlp search target, so we use the public search JSON and keep only posts that
+ * carry a playable video (is_video / v.redd.it / known video hosts). The returned
+ * permalinks are then resolved + downloaded by the banker via ytdlp.fetchByUrl.
+ */
+export async function searchRedditVideos(
+  query: string,
+  opts?: { limit?: number; minScore?: number },
+): Promise<RedditVideoHit[]> {
+  const limit = opts?.limit ?? 15;
+  const minScore = opts?.minScore ?? 30;
+  const url =
+    `https://www.reddit.com/search.json?q=${encodeURIComponent(query)}` +
+    `&type=link&sort=top&t=month&limit=${limit}&raw_json=1&include_over_18=off`;
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const resp = await fetch(url, { headers: { 'User-Agent': USER_AGENT }, signal: ac.signal });
+    if (!resp.ok) {
+      log('warn', 'reddit.search_failed', { query, status: resp.status });
+      return [];
+    }
+    const json = (await resp.json()) as { data?: { children?: RedditChild[] } };
+    const hits: RedditVideoHit[] = [];
+    for (const c of json.data?.children ?? []) {
+      const d = c.data as (RedditChild['data'] & { is_video?: boolean; domain?: string; post_hint?: string }) | undefined;
+      if (!d?.title || !d.permalink) continue;
+      if (d.over_18 || d.removed_by_category) continue;
+      if ((d.score ?? 0) < minScore) continue;
+      const looksVideo =
+        d.is_video === true ||
+        d.post_hint === 'hosted:video' ||
+        d.post_hint === 'rich:video' ||
+        /v\.redd\.it|youtube\.com|youtu\.be|streamable\.com|gfycat\.com/i.test(`${d.url ?? ''} ${d.domain ?? ''}`);
+      if (!looksVideo) continue;
+      hits.push({ permalink: `https://www.reddit.com${d.permalink}`, title: d.title, score: d.score ?? 0 });
+    }
+    hits.sort((a, b) => b.score - a.score);
+    log('info', 'reddit.video_search', { query, found: hits.length });
+    return hits;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    log('warn', 'reddit.search_error', { query, error: msg.slice(0, 200) });
+    return [];
+  } finally {
+    clearTimeout(timer);
+  }
+}

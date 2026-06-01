@@ -21,7 +21,14 @@ export interface ThemeInput {
   niche?: string;
 }
 
-export type SourcePlatform = 'bilibili' | 'douyin' | 'xiaohongshu' | 'youtube';
+export type SourcePlatform =
+  | 'bilibili'
+  | 'douyin'
+  | 'xiaohongshu'
+  | 'youtube'
+  | 'reddit'
+  | 'weibo'
+  | 'instagram';
 export type CandidateStatus = 'available' | 'consumed' | 'rejected';
 
 export interface Candidate {

@@ -4,6 +4,14 @@ import { createReadStream, existsSync, statSync } from 'node:fs';
 import { log } from './logger.js';
 
 export type SearchPlatform = 'bilibili' | 'douyin' | 'youtube';
+export type Platform =
+  | 'bilibili'
+  | 'douyin'
+  | 'xiaohongshu'
+  | 'youtube'
+  | 'reddit'
+  | 'weibo'
+  | 'instagram';
 
 /**
  * Optional proxy for ALL yt-dlp calls. Set YTDLP_PROXY (e.g. socks5://127.0.0.1:7890)
@@ -36,7 +44,7 @@ function isBilibiliUrl(url: string): boolean {
 }
 
 export type SearchResult = {
-  source_platform: 'bilibili' | 'douyin' | 'xiaohongshu' | 'youtube';
+  source_platform: Platform;
   source_url: string;
   source_video_id: string;
   title: string;
@@ -81,7 +89,47 @@ function platformFromUrl(url: string): SearchResult['source_platform'] {
   if (/bilibili\.com|b23\.tv/i.test(url)) return 'bilibili';
   if (/douyin\.com|iesdouyin\.com/i.test(url)) return 'douyin';
   if (/xiaohongshu\.com|xhslink\.com/i.test(url)) return 'xiaohongshu';
+  if (/redd\.it|reddit\.com/i.test(url)) return 'reddit';
+  if (/weibo\.(com|cn)/i.test(url)) return 'weibo';
+  if (/instagram\.com|instagr\.am/i.test(url)) return 'instagram';
   return 'youtube';
+}
+
+/**
+ * Fetch metadata for a SINGLE known video URL (Reddit / Weibo / Instagram / any
+ * yt-dlp-supported page) — these platforms have no search target, so the banker
+ * discovers candidate URLs elsewhere (e.g. Reddit signals) and resolves them here.
+ * Returns null if the URL is not a downloadable video.
+ */
+export async function fetchByUrl(url: string): Promise<SearchResult | null> {
+  const args = ['--dump-single-json', '--no-warnings', '--skip-download', '--no-playlist', ...proxyArgs()];
+  const cookiesFile = process.env.INSTAGRAM_COOKIES_FILE?.trim();
+  if (/instagram\.com|instagr\.am/i.test(url) && cookiesFile && existsSync(cookiesFile)) {
+    args.unshift('--cookies', cookiesFile);
+  }
+  args.push(url);
+  let stdout = '';
+  try {
+    const r = await execFileAsync('yt-dlp', args, SEARCH_TIMEOUT_MS);
+    stdout = r.stdout;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    log('warn', 'ytdlp.fetch_url_failed', { url, error: msg.slice(0, 300) });
+    return null;
+  }
+  let raw: RawEntry;
+  try {
+    raw = JSON.parse(stdout.trim()) as RawEntry;
+  } catch {
+    return null;
+  }
+  // For a single-video page the dump has the fields directly; reuse normalizeEntry.
+  const norm = normalizeEntry(raw, platformFromUrl(url));
+  if (norm && (!raw.duration || raw.duration <= 0)) {
+    // single-json gives real duration; if missing it's likely an image post, skip.
+    if (!/redd\.it|reddit\.com/i.test(url)) return null;
+  }
+  return norm;
 }
 
 function buildSearchTarget(
