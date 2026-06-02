@@ -197,27 +197,32 @@ export async function insertThemes(themes: ThemeInput[], scoutRunId: number): Pr
   if (themes.length === 0) return [];
   const db = getDb();
   const createdAt = now();
+  const genIds = themes.map(() => uuid());
+  const stmts = themes.map((t, i) => ({
+    sql: `INSERT OR IGNORE INTO themes
+          (id, title, cn_keywords, why_hot, sources, niche, created_at, scout_run_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    args: [
+      genIds[i],
+      t.title,
+      JSON.stringify(t.cn_keywords),
+      t.why_hot ?? null,
+      JSON.stringify(t.sources ?? []),
+      t.niche ?? 'general',
+      createdAt,
+      scoutRunId,
+    ] as InValue[],
+  }));
+  const results = await db.batch(stmts, 'write');
+  // INSERT OR IGNORE skips titles that already exist (themes_title_uidx). Return
+  // only the IDs of rows actually inserted — matching each statement's result by
+  // index — so the caller's "themes_inserted" count and the returned IDs are
+  // truthful (previously every generated UUID was returned, over-counting
+  // re-discovered themes and yielding IDs that map to no row).
   const ids: string[] = [];
-  const stmts = themes.map((t) => {
-    const id = uuid();
-    ids.push(id);
-    return {
-      sql: `INSERT OR IGNORE INTO themes
-            (id, title, cn_keywords, why_hot, sources, niche, created_at, scout_run_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      args: [
-        id,
-        t.title,
-        JSON.stringify(t.cn_keywords),
-        t.why_hot ?? null,
-        JSON.stringify(t.sources ?? []),
-        t.niche ?? 'general',
-        createdAt,
-        scoutRunId,
-      ] as InValue[],
-    };
+  results.forEach((res, i) => {
+    if (res.rowsAffected > 0) ids.push(genIds[i]);
   });
-  await db.batch(stmts, 'write');
   return ids;
 }
 
