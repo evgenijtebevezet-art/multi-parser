@@ -70,30 +70,38 @@ jobs:
           node -e '
             const fs=require("fs");
             const raw=fs.readFileSync(process.env.RUNNER_TEMP+"/clash/sub.raw","utf8");
-            let d=JSON.parse(raw);
+            const d=JSON.parse(raw);
             const cfg=Array.isArray(d)?d[0]:d;
             cfg["mixed-port"]=7890;
             cfg["allow-lan"]=false;
-            cfg["mode"]="rule";
             cfg["external-controller"]="127.0.0.1:9090";
             delete cfg["port"]; delete cfg["socks-port"];
+            const proxies=Array.isArray(cfg.proxies)?cfg.proxies:[];
+            const names=proxies.map(p=>p&&p.name).filter(Boolean);
+            if(names.length===0) console.error("::warning::no Clash proxies in subscription (sing-box format?) — VPN will not route");
+            // Force ALL traffic through the fastest node (url-test) — the sub`s own
+            // rules often send CN sites (Bilibili) DIRECT, i.e. via the Azure runner
+            // IP, which keeps the 412. MATCH->AUTO removes that leak.
+            cfg["proxy-groups"]=[{name:"AUTO",type:"url-test",url:"http://www.gstatic.com/generate_204",interval:300,tolerance:150,proxies:names.length?names:["DIRECT"]}];
+            cfg["rules"]=["MATCH,AUTO"];
+            cfg["mode"]="rule";
             fs.writeFileSync(process.env.RUNNER_TEMP+"/clash/config.yaml", JSON.stringify(cfg));
-            console.log("clash config written: outbounds="+(cfg.proxies?cfg.proxies.length:(cfg.outbounds?cfg.outbounds.length:"?")));
+            console.log("clash config: nodes="+names.length+", routing=MATCH->AUTO(url-test)");
           '
           nohup mihomo -d "$RUNNER_TEMP/clash" > "$RUNNER_TEMP/clash/mihomo.log" 2>&1 &
-          echo "waiting for proxy on 127.0.0.1:7890 ..."
+          # Confirm the proxy actually CHANGES our egress IP (catches dead node / route leak).
+          DIRECT_IP=$(curl -s --max-time 10 https://api.ipify.org || echo "direct-unknown")
+          echo "runner direct egress: ${DIRECT_IP}"
           for i in $(seq 1 30); do
-            if curl -s --max-time 8 -x http://127.0.0.1:7890 https://api.bilibili.com >/dev/null 2>&1 \
-               || curl -s --max-time 8 -x http://127.0.0.1:7890 https://www.youtube.com >/dev/null 2>&1; then
-              echo "proxy is up (egress reachable)"
+            PROXY_IP=$(curl -s --max-time 8 -x http://127.0.0.1:7890 https://api.ipify.org 2>/dev/null || echo "")
+            if [ -n "$PROXY_IP" ] && [ "$PROXY_IP" != "$DIRECT_IP" ]; then
+              echo "::notice::VPN up — egress ${PROXY_IP} (runner ${DIRECT_IP})"
               echo "YTDLP_PROXY=http://127.0.0.1:7890" >> "$GITHUB_ENV"
-              EGRESS_IP=$(curl -s --max-time 10 -x http://127.0.0.1:7890 https://api.ipify.org || echo "?")
-              echo "::notice::VPN egress IP=${EGRESS_IP}"
               exit 0
             fi
             sleep 2
           done
-          echo "::warning::mihomo did not become ready in time — continuing WITHOUT proxy"
+          echo "::warning::VPN not routing (egress unreachable or == runner IP) — continuing WITHOUT proxy"
           tail -20 "$RUNNER_TEMP/clash/mihomo.log" || true
       - run: npm install --no-audit --no-fund
       - name: Run banker
