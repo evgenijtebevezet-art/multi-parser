@@ -7,6 +7,7 @@ import { insertScoutRun, finishRun, insertThemes, type ThemeInput } from '../sha
 import { callLlmCascade, CASCADE_SCOUT, type LlmResult } from '../shared/llmFallback.js';
 import { SYSTEM_PROMPT, buildUserPrompt } from './prompts.js';
 import { fetchRedditTrending } from '../shared/reddit.js';
+import { fetchSearchGrounding } from '../shared/search.js';
 import { ScoutResponseSchema, SCOUT_JSON_SCHEMA, type ScoutResponse } from './schema.js';
 
 const DRY_RUN = process.argv.includes('--dry-run');
@@ -85,8 +86,18 @@ async function getScoutResponse(): Promise<{ response: ScoutResponse; llm: LlmRe
       });
     }
   }
+  let searchSignals: string[] = [];
+  try {
+    const hits = await fetchSearchGrounding();
+    searchSignals = hits.map((h) => (h.snippet ? `${h.title} — ${h.snippet}` : h.title));
+    log('info', 'scout.search_signals', { count: searchSignals.length });
+  } catch (e) {
+    log('warn', 'scout.search_failed', {
+      error: e instanceof Error ? e.message.slice(0, 200) : String(e),
+    });
+  }
   const llm = await callLlmCascade(CASCADE_SCOUT, {
-    prompt: buildUserPrompt(todayIso(), redditSignals),
+    prompt: buildUserPrompt(todayIso(), redditSignals, searchSignals),
     systemPrompt: SYSTEM_PROMPT,
     responseFormat: 'json',
     jsonSchema: SCOUT_JSON_SCHEMA,
