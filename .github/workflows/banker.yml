@@ -62,15 +62,24 @@ jobs:
             "https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VER}/mihomo-linux-amd64-${MIHOMO_VER}.gz"
           gunzip -f /tmp/mihomo.gz && chmod +x /tmp/mihomo && sudo mv /tmp/mihomo /usr/local/bin/mihomo
           mkdir -p "$RUNNER_TEMP/clash"
-          # Fetch subscription; force a known local mixed port + allow-lan off.
-          curl -fsSL --retry 3 "$VPN_SUB_URL" -o "$RUNNER_TEMP/clash/config.yaml"
-          {
-            echo ""
-            echo "mixed-port: 7890"
-            echo "allow-lan: false"
-            echo "mode: rule"
-            echo "external-controller: 127.0.0.1:9090"
-          } >> "$RUNNER_TEMP/clash/config.yaml"
+          # Fetch subscription (Clash.Meta JSON, often a JSON ARRAY with \uXXXX server
+          # names). Parse as JSON via node, take element 0, force local port/mode, and
+          # write as JSON (mihomo reads JSON configs fine) — avoids the YAML Unicode-escape
+          # parse error you get from appending YAML lines to a JSON body.
+          curl -fsSL --retry 3 "$VPN_SUB_URL" -o "$RUNNER_TEMP/clash/sub.raw"
+          node -e '
+            const fs=require("fs");
+            const raw=fs.readFileSync(process.env.RUNNER_TEMP+"/clash/sub.raw","utf8");
+            let d=JSON.parse(raw);
+            const cfg=Array.isArray(d)?d[0]:d;
+            cfg["mixed-port"]=7890;
+            cfg["allow-lan"]=false;
+            cfg["mode"]="rule";
+            cfg["external-controller"]="127.0.0.1:9090";
+            delete cfg["port"]; delete cfg["socks-port"];
+            fs.writeFileSync(process.env.RUNNER_TEMP+"/clash/config.yaml", JSON.stringify(cfg));
+            console.log("clash config written: outbounds="+(cfg.proxies?cfg.proxies.length:(cfg.outbounds?cfg.outbounds.length:"?")));
+          '
           nohup mihomo -d "$RUNNER_TEMP/clash" > "$RUNNER_TEMP/clash/mihomo.log" 2>&1 &
           echo "waiting for proxy on 127.0.0.1:7890 ..."
           for i in $(seq 1 30); do
@@ -94,8 +103,13 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
-          GDRIVE_SA_JSON: ${{ secrets.GDRIVE_SA_JSON }}
+          GDRIVE_OAUTH_CLIENT_ID: ${{ secrets.GDRIVE_OAUTH_CLIENT_ID }}
+          GDRIVE_OAUTH_CLIENT_SECRET: ${{ secrets.GDRIVE_OAUTH_CLIENT_SECRET }}
+          GDRIVE_OAUTH_REFRESH_TOKEN: ${{ secrets.GDRIVE_OAUTH_REFRESH_TOKEN }}
+          GDRIVE_QUOTA_PROJECT: ${{ secrets.GDRIVE_QUOTA_PROJECT }}
           GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          SEARCH_API_KEY: ${{ secrets.SEARCH_API_KEY }}
           CONTENT_BANK_VIDEOS_DIR: ./data/videos
         run: |
           if [ "${{ inputs.dry_run }}" = "true" ]; then
