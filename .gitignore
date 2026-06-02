@@ -9,3 +9,8 @@ runs/
 *.log
 .DS_Store
 output/
+
+# Local probe/research artifacts (raw API dumps, scratch notes) — never bank these
+research/
+docs/research/
+.memos/
