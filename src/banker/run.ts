@@ -12,6 +12,7 @@ import {
   type Theme,
 } from '../shared/repositories.js';
 import { downloadVideo } from '../shared/ytdlp.js';
+import { getStorage } from '../shared/storage.js';
 import { searchAcrossPlatforms, type RankedCandidate } from './searchAndRank.js';
 
 type CliArgs = {
@@ -132,6 +133,21 @@ async function processCandidate(
     return;
   }
 
+  // Push to durable storage (GDrive when configured, else a local-fs copy) so the
+  // banked video survives beyond the ephemeral CI runner and consumers can fetch it
+  // by gdrive_file_id. Fail-safe: an upload failure logs and leaves gdrive_file_id
+  // null rather than dropping the candidate (the local artifact still exists).
+  const storageKey = `${niche}/${fileName}`;
+  let gdriveFileId: string | null = null;
+  try {
+    const up = await getStorage().upload(downloaded.path, storageKey);
+    gdriveFileId = up.id;
+    log('info', 'banker.storage.uploaded', { key: storageKey, id: up.id });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    log('warn', 'banker.storage.upload_failed', { key: storageKey, error: msg.slice(0, 200) });
+  }
+
   const result = await insertCandidate({
     theme_id: theme.id,
     source_platform: cand.source_platform,
@@ -143,6 +159,7 @@ async function processCandidate(
     view_count: cand.view_count,
     upload_date: cand.upload_date || null,
     local_path: downloaded.path,
+    gdrive_file_id: gdriveFileId,
     sha256: downloaded.sha256,
     embedding: Array.from(embedding),
     quality_score: cand.quality_score,
