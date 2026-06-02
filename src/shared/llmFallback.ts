@@ -393,26 +393,25 @@ async function nvidiaEmbed(text: string): Promise<Float32Array> {
 export async function getEmbedding(text: string): Promise<Float32Array> {
   const trimmed = text.trim();
   if (!trimmed) throw new Error('getEmbedding: empty text');
+  // Dedup correctness REQUIRES every stored vector come from the SAME embedding
+  // model: cosine distance between vectors from different models — or a real
+  // vector vs a zero-padded one — is meaningless. So we use exactly ONE provider
+  // (env.EMBEDDING_PROVIDER) and intentionally do NOT fall back to a different
+  // model. A transient failure throws; the banker catches it and skips the
+  // candidate (re-discoverable next run), which is strictly better than poisoning
+  // the dedup space with an incomparable vector.
+  const provider = env.EMBEDDING_PROVIDER;
+  const model = provider === 'gemini' ? 'gemini-embedding-001' : 'baai/bge-m3';
   const t0 = Date.now();
+  log('info', 'embed.attempt', { provider, model });
   try {
-    log('info', 'embed.attempt', { provider: 'gemini', model: 'gemini-embedding-001' });
-    const v = await geminiEmbed(trimmed);
-    log('info', 'embed.ok', { provider: 'gemini', ms: Date.now() - t0, dim: v.length });
+    const v = provider === 'gemini' ? await geminiEmbed(trimmed) : await nvidiaEmbed(trimmed);
+    log('info', 'embed.ok', { provider, model, ms: Date.now() - t0, dim: v.length });
     return v;
   } catch (e) {
     const kind = e instanceof LlmError ? e.kind : 'unknown';
     const msg = e instanceof Error ? e.message : String(e);
-    log('warn', 'embed.fail', { provider: 'gemini', kind, error: msg.slice(0, 300) });
-  }
-  const t1 = Date.now();
-  try {
-    log('info', 'embed.attempt', { provider: 'nvidia', model: 'baai/bge-m3' });
-    const v = await nvidiaEmbed(trimmed);
-    log('info', 'embed.ok', { provider: 'nvidia', ms: Date.now() - t1, dim: v.length });
-    return v;
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    log('error', 'embed.fail', { provider: 'nvidia', error: msg.slice(0, 300) });
-    throw new Error(`getEmbedding: all providers failed: ${msg}`);
+    log('error', 'embed.fail', { provider, model, kind, error: msg.slice(0, 300) });
+    throw new Error(`getEmbedding: ${provider} failed (no cross-model fallback): ${msg}`);
   }
 }

@@ -7,6 +7,11 @@ const Env = z.object({
   GEMINI_API_KEY: z.string().optional(),
   GROQ_API_KEY: z.string().optional(),
   NVIDIA_API_KEY: z.string().optional(),
+  // Embedding model used for candidate dedup. MUST stay fixed for a deployment:
+  // dedup compares vectors by cosine distance, which is only meaningful between
+  // vectors from the SAME model — there is intentionally no cross-model fallback.
+  // Default nvidia (baai/bge-m3) since the Gemini key is suspended + geo-blocked.
+  EMBEDDING_PROVIDER: z.enum(['gemini', 'nvidia']).default('nvidia'),
   CONTENT_BANK_DATA_DIR: z.string().default('./data'),
   CONTENT_BANK_VIDEOS_DIR: z.string().default('./data/videos'),
   YOUTUBE_API_KEY: z.string().optional(),
