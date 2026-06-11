@@ -136,12 +136,12 @@ export async function claimNextCandidate(opts: ClaimOptions): Promise<Candidate 
   }
 }
 
-export async function releaseClaim(candidateId: string): Promise<boolean> {
+export async function releaseClaim(candidateId: string, terminal = false): Promise<boolean> {
   const db = getDb();
   const res = await db.execute({
-    sql: `UPDATE candidates SET status = 'available'
+    sql: `UPDATE candidates SET status = ?
           WHERE id = ? AND status = 'consumed'`,
-    args: [candidateId],
+    args: [terminal ? 'rejected' : 'available', candidateId],
   });
   return res.rowsAffected === 1;
 }

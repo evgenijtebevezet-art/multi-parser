@@ -1,5 +1,8 @@
 import { access } from 'node:fs/promises';
+import { join } from 'node:path';
+import { env } from '../shared/env.js';
 import { log } from '../shared/logger.js';
+import { getStorage } from '../shared/storage.js';
 import { getDailyPicks } from '../shared/repositories.js';
 import type { Candidate, Theme } from '../shared/repositories.js';
 import {
@@ -78,26 +81,53 @@ export async function getNextCandidate(
     return null;
   }
 
-  const videoExists = await fileExists(candidate.local_path);
+  // The banker ran on a different (ephemeral) machine, so candidate.local_path
+  // rarely exists here. If the media was durably stored (gdrive_file_id set), pull
+  // it down from storage so the consumer gets a usable local file. The storage key
+  // mirrors what the banker uploaded: `${niche}/${platform}_${videoId}.mp4`.
+  let localPath = candidate.local_path;
+  let videoExists = await fileExists(localPath);
+  if (!videoExists && candidate.gdrive_file_id) {
+    const key = `${theme.niche || 'general'}/${candidate.source_platform}_${candidate.source_video_id}.mp4`;
+    const dest = join(env.CONTENT_BANK_VIDEOS_DIR, key);
+    try {
+      await getStorage().downloadTo(key, dest);
+      localPath = dest;
+      videoExists = true;
+      log('info', 'reader: media fetched from storage', { candidate_id: candidate.id, key, dest });
+    } catch (e) {
+      log('warn', 'reader: media fetch from storage failed', {
+        candidate_id: candidate.id,
+        key,
+        gdrive_file_id: candidate.gdrive_file_id,
+        error: e instanceof Error ? e.message.slice(0, 200) : String(e),
+      });
+    }
+  }
   if (!videoExists) {
-    log('warn', 'reader: local_path missing on disk', {
+    log('warn', 'reader: media unavailable (no local file, no durable copy)', {
       candidate_id: candidate.id,
       local_path: candidate.local_path,
       gdrive_file_id: candidate.gdrive_file_id,
     });
   }
 
-  return { candidate, theme, videoExists };
+  return { candidate: { ...candidate, local_path: localPath }, theme, videoExists };
 }
 
 export async function releaseCandidate(
   candidateId: string,
   reason: ReleaseReason,
 ): Promise<void> {
-  const updated = await releaseClaim(candidateId);
+  // 'rejected' means the consumer judged the content unusable — make it terminal so
+  // it is never re-served. 'failed_render'/'manual' are transient: return it to the
+  // pool ('available') so another bot/run can claim it.
+  const terminal = reason === 'rejected';
+  const updated = await releaseClaim(candidateId, terminal);
   log(updated ? 'info' : 'warn', 'reader: release candidate', {
     candidate_id: candidateId,
     reason,
+    terminal,
     updated,
   });
 }
