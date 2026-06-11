@@ -10,7 +10,6 @@
   "scripts": {
     "scout": "tsx src/scout/run.ts",
     "banker": "tsx src/banker/run.ts",
-    "editor": "tsx src/scripts/editorPick.ts",
     "init-db": "tsx src/scripts/initDb.ts",
     "seed": "tsx src/scripts/seedTheme.ts",
     "reader:demo": "tsx src/scripts/readerDemo.ts",
