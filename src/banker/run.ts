@@ -135,16 +135,28 @@ async function processCandidate(
 
   // Push to durable storage (GDrive when configured, else a local-fs copy) so the
   // banked video survives beyond the ephemeral CI runner and consumers can fetch it
-  // by gdrive_file_id. Fail-safe: an upload failure logs and leaves gdrive_file_id
-  // null rather than dropping the candidate (the local artifact still exists).
+  // by gdrive_file_id. On a DURABLE backend (Drive) an upload failure is fatal for
+  // this candidate: banking it with gdrive_file_id=null would hand consumers a row
+  // pointing at a file that vanishes with the runner, so we skip it and record an
+  // error (turns the run red instead of silently green). On local-fs (dev) we keep
+  // going — there is no durable target to miss.
+  const storage = getStorage();
   const storageKey = `${niche}/${fileName}`;
   let gdriveFileId: string | null = null;
   try {
-    const up = await getStorage().upload(downloaded.path, storageKey);
+    const up = await storage.upload(downloaded.path, storageKey);
     gdriveFileId = up.id;
     log('info', 'banker.storage.uploaded', { key: storageKey, id: up.id });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
+    if (storage.durable) {
+      log('error', 'banker.storage.upload_failed', { key: storageKey, error: msg.slice(0, 200) });
+      await safeUnlink(downloaded.path);
+      themeSummary.skipped++;
+      summary.candidatesSkipped++;
+      summary.errors.push(`storage upload failed for ${storageKey}: ${msg.slice(0, 200)}`);
+      return;
+    }
     log('warn', 'banker.storage.upload_failed', { key: storageKey, error: msg.slice(0, 200) });
   }
 
@@ -331,13 +343,20 @@ async function main(): Promise<void> {
     }
 
     await writeArtifact(artifactPath, summary);
-    await finishRun(runId, 'ok', artifactPath);
-    log('info', 'banker.run.ok', {
+    // Non-fatal per-candidate failures (notably durable-storage upload failures)
+    // accumulate in summary.errors. If any occurred, finish the run as 'error' and
+    // exit non-zero so a broken Drive/upload path shows up RED in Actions instead
+    // of a green run that banked nothing deliverable.
+    const status: 'ok' | 'error' = summary.errors.length > 0 ? 'error' : 'ok';
+    await finishRun(runId, status, artifactPath);
+    log(status === 'error' ? 'error' : 'info', 'banker.run.done', {
+      status,
       themesProcessed: summary.themesProcessed,
       candidatesInserted: summary.candidatesInserted,
       candidatesSkipped: summary.candidatesSkipped,
       errors: summary.errors.length,
     });
+    if (status === 'error') process.exitCode = 1;
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     log('error', 'banker.run.error', { error: msg.slice(0, 400) });

@@ -4,6 +4,13 @@ import { env } from './env.js';
 import { log } from './logger.js';
 
 export interface StorageBackend {
+  /**
+   * Durable = survives beyond the ephemeral CI runner (Drive). The local-fs
+   * backend is NOT durable: on Actions its files vanish when the job ends, so an
+   * upload "succeeding" there does not mean consumers can ever fetch the media.
+   * The banker uses this to fail loud instead of banking un-deliverable content.
+   */
+  readonly durable: boolean;
   upload(localPath: string, key: string): Promise<{ id: string; pathOrUri: string }>;
   exists(key: string): Promise<boolean>;
   downloadTo(key: string, dest: string): Promise<void>;
@@ -14,6 +21,8 @@ function ensureDir(path: string): void {
 }
 
 class LocalFsBackend implements StorageBackend {
+  readonly durable = false;
+
   constructor(private readonly root: string) {
     ensureDir(this.root);
   }
@@ -53,6 +62,7 @@ type GDriveAuth =
   | { kind: 'sa'; saJson: string };
 
 class GDriveBackend implements StorageBackend {
+  readonly durable = true;
   private driveP: Promise<import('googleapis').drive_v3.Drive> | null = null;
   private readonly folderId: string;
   private readonly folderCache = new Map<string, string>();
