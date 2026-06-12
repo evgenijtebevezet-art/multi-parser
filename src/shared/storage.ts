@@ -4,6 +4,13 @@ import { env } from './env.js';
 import { log } from './logger.js';
 
 export interface StorageBackend {
+  /**
+   * Durable = survives beyond the ephemeral CI runner (Drive). The local-fs
+   * backend is NOT durable: on Actions its files vanish when the job ends, so an
+   * upload "succeeding" there does not mean consumers can ever fetch the media.
+   * The banker uses this to fail loud instead of banking un-deliverable content.
+   */
+  readonly durable: boolean;
   upload(localPath: string, key: string): Promise<{ id: string; pathOrUri: string }>;
   exists(key: string): Promise<boolean>;
   downloadTo(key: string, dest: string): Promise<void>;
@@ -14,6 +21,8 @@ function ensureDir(path: string): void {
 }
 
 class LocalFsBackend implements StorageBackend {
+  readonly durable = false;
+
   constructor(private readonly root: string) {
     ensureDir(this.root);
   }
@@ -48,26 +57,46 @@ class LocalFsBackend implements StorageBackend {
   }
 }
 
+type GDriveAuth =
+  | { kind: 'oauth'; clientId: string; clientSecret: string; refreshToken: string; quotaProject?: string }
+  | { kind: 'sa'; saJson: string };
+
 class GDriveBackend implements StorageBackend {
+  readonly durable = true;
   private driveP: Promise<import('googleapis').drive_v3.Drive> | null = null;
   private readonly folderId: string;
   private readonly folderCache = new Map<string, string>();
 
-  constructor(saJson: string, folderId: string) {
+  constructor(auth: GDriveAuth, folderId: string) {
     this.folderId = folderId;
-    this.driveP = this.init(saJson);
+    this.driveP = this.init(auth);
   }
 
-  private async init(saJson: string): Promise<import('googleapis').drive_v3.Drive> {
+  private async init(auth: GDriveAuth): Promise<import('googleapis').drive_v3.Drive> {
     const { google } = await import('googleapis');
-    const credentials = JSON.parse(saJson) as { client_email: string; private_key: string };
-    const auth = new google.auth.JWT({
+    if (auth.kind === 'oauth') {
+      // Personal (@gmail) Drive: service accounts have zero storage quota, so we
+      // upload as the user via an OAuth refresh token (files owned by the user,
+      // counted against their quota). The OAuth client is Google's own gcloud
+      // client, which has no Drive API enabled — so Drive quota/enablement must
+      // be attributed to OUR project via the x-goog-user-project header, which
+      // google-auth-library injects when quotaProjectId is set.
+      const oauth = new google.auth.OAuth2({
+        clientId: auth.clientId,
+        clientSecret: auth.clientSecret
+      });
+      oauth.setCredentials({ refresh_token: auth.refreshToken });
+      if (auth.quotaProject) oauth.quotaProjectId = auth.quotaProject;
+      return google.drive({ version: 'v3', auth: oauth });
+    }
+    const credentials = JSON.parse(auth.saJson) as { client_email: string; private_key: string };
+    const jwt = new google.auth.JWT({
       email: credentials.client_email,
       key: credentials.private_key,
       scopes: ['https://www.googleapis.com/auth/drive']
     });
-    await auth.authorize();
-    return google.drive({ version: 'v3', auth });
+    await jwt.authorize();
+    return google.drive({ version: 'v3', auth: jwt });
   }
 
   private async drive(): Promise<import('googleapis').drive_v3.Drive> {
@@ -200,9 +229,21 @@ let cached: StorageBackend | undefined;
 export function getStorage(): StorageBackend {
   if (cached) return cached;
   const folderId = process.env.GDRIVE_FOLDER_ID;
-  if (env.GDRIVE_SA_JSON && folderId) {
-    log('info', 'storage.backend', { backend: 'gdrive', folderId });
-    cached = new GDriveBackend(env.GDRIVE_SA_JSON, folderId);
+  if (env.GDRIVE_OAUTH_CLIENT_ID && env.GDRIVE_OAUTH_REFRESH_TOKEN && folderId) {
+    log('info', 'storage.backend', { backend: 'gdrive-oauth', folderId });
+    cached = new GDriveBackend(
+      {
+        kind: 'oauth',
+        clientId: env.GDRIVE_OAUTH_CLIENT_ID,
+        clientSecret: env.GDRIVE_OAUTH_CLIENT_SECRET ?? '',
+        refreshToken: env.GDRIVE_OAUTH_REFRESH_TOKEN,
+        quotaProject: env.GDRIVE_QUOTA_PROJECT
+      },
+      folderId
+    );
+  } else if (env.GDRIVE_SA_JSON && folderId) {
+    log('info', 'storage.backend', { backend: 'gdrive-sa', folderId });
+    cached = new GDriveBackend({ kind: 'sa', saJson: env.GDRIVE_SA_JSON }, folderId);
   } else {
     const root = env.CONTENT_BANK_VIDEOS_DIR ?? './data/videos';
     log('info', 'storage.backend', { backend: 'local-fs', root });

@@ -6,15 +6,26 @@ Rules:
 - Avoid: politics, military, crypto, gambling, scams, gaming livestreams
 - Niche must be one of: "ev" | "smartphone" | "robot" | "smart_home" | "drone" | "wearable" | "general"`;
 
-export function buildUserPrompt(date: string, redditSignals: string[] = []): string {
+export function buildUserPrompt(
+  date: string,
+  redditSignals: string[] = [],
+  searchSignals: string[] = [],
+): string {
   const signalsBlock =
     redditSignals.length > 0
       ? `\nReal trending Reddit posts from the last week (use as HINTS — keep only ones fitting Chinese tech / EV / robot / gadget topics, ignore the rest):\n${redditSignals
           .map((s, i) => `${i + 1}. ${s}`)
           .join('\n')}\n`
       : '';
-  return `Today is ${date}. Use google_search grounding${redditSignals.length > 0 ? ' and the Reddit signals below' : ''} to find what is HOT in Chinese tech right now (within the last 14 days).
-${signalsBlock}Return JSON with shape:
+  const searchBlock =
+    searchSignals.length > 0
+      ? `\nRecent web search results (Custom Search, last 14 days — use as grounding, prefer specific products/events, ignore irrelevant hits):\n${searchSignals
+          .map((s, i) => `${i + 1}. ${s}`)
+          .join('\n')}\n`
+      : '';
+  const hasSignals = redditSignals.length > 0 || searchSignals.length > 0;
+  return `Today is ${date}. Use google_search grounding${hasSignals ? ' and the real signals below' : ''} to find what is HOT in Chinese tech right now (within the last 14 days).
+${signalsBlock}${searchBlock}Return JSON with shape:
 {
   "themes": [
     {

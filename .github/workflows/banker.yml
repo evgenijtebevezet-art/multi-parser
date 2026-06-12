@@ -48,6 +48,61 @@ jobs:
               echo "::warning::Bilibili cookie marker '$marker' missing"
             fi
           done
+      - name: Start VPN proxy (mihomo)
+        env:
+          VPN_SUB_URL: ${{ secrets.VPN_SUB_URL }}
+        run: |
+          if [ -z "${VPN_SUB_URL:-}" ]; then
+            echo "::notice::VPN_SUB_URL not set — yt-dlp runs without proxy (Bilibili-only effective)"
+            exit 0
+          fi
+          # Install mihomo (Clash.Meta) — the subscription is Clash-format JSON.
+          MIHOMO_VER="v1.18.10"
+          curl -fsSL --retry 3 -o /tmp/mihomo.gz \
+            "https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VER}/mihomo-linux-amd64-${MIHOMO_VER}.gz"
+          gunzip -f /tmp/mihomo.gz && chmod +x /tmp/mihomo && sudo mv /tmp/mihomo /usr/local/bin/mihomo
+          mkdir -p "$RUNNER_TEMP/clash"
+          # Fetch subscription (Clash.Meta JSON, often a JSON ARRAY with \uXXXX server
+          # names). Parse as JSON via node, take element 0, force local port/mode, and
+          # write as JSON (mihomo reads JSON configs fine) — avoids the YAML Unicode-escape
+          # parse error you get from appending YAML lines to a JSON body.
+          curl -fsSL --retry 3 "$VPN_SUB_URL" -o "$RUNNER_TEMP/clash/sub.raw"
+          node -e '
+            const fs=require("fs");
+            const raw=fs.readFileSync(process.env.RUNNER_TEMP+"/clash/sub.raw","utf8");
+            const d=JSON.parse(raw);
+            const cfg=Array.isArray(d)?d[0]:d;
+            cfg["mixed-port"]=7890;
+            cfg["allow-lan"]=false;
+            cfg["external-controller"]="127.0.0.1:9090";
+            delete cfg["port"]; delete cfg["socks-port"];
+            const proxies=Array.isArray(cfg.proxies)?cfg.proxies:[];
+            const names=proxies.map(p=>p&&p.name).filter(Boolean);
+            if(names.length===0) console.error("::warning::no Clash proxies in subscription (sing-box format?) — VPN will not route");
+            // Force ALL traffic through the fastest node (url-test) — the sub`s own
+            // rules often send CN sites (Bilibili) DIRECT, i.e. via the Azure runner
+            // IP, which keeps the 412. MATCH->AUTO removes that leak.
+            cfg["proxy-groups"]=[{name:"AUTO",type:"url-test",url:"http://www.gstatic.com/generate_204",interval:300,tolerance:150,proxies:names.length?names:["DIRECT"]}];
+            cfg["rules"]=["MATCH,AUTO"];
+            cfg["mode"]="rule";
+            fs.writeFileSync(process.env.RUNNER_TEMP+"/clash/config.yaml", JSON.stringify(cfg));
+            console.log("clash config: nodes="+names.length+", routing=MATCH->AUTO(url-test)");
+          '
+          nohup mihomo -d "$RUNNER_TEMP/clash" > "$RUNNER_TEMP/clash/mihomo.log" 2>&1 &
+          # Confirm the proxy actually CHANGES our egress IP (catches dead node / route leak).
+          DIRECT_IP=$(curl -s --max-time 10 https://api.ipify.org || echo "direct-unknown")
+          echo "runner direct egress: ${DIRECT_IP}"
+          for i in $(seq 1 30); do
+            PROXY_IP=$(curl -s --max-time 8 -x http://127.0.0.1:7890 https://api.ipify.org 2>/dev/null || echo "")
+            if [ -n "$PROXY_IP" ] && [ "$PROXY_IP" != "$DIRECT_IP" ]; then
+              echo "::notice::VPN up — egress ${PROXY_IP} (runner ${DIRECT_IP})"
+              echo "YTDLP_PROXY=http://127.0.0.1:7890" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::warning::VPN not routing (egress unreachable or == runner IP) — continuing WITHOUT proxy"
+          tail -20 "$RUNNER_TEMP/clash/mihomo.log" || true
       - run: npm install --no-audit --no-fund
       - name: Run banker
         env:
@@ -56,8 +111,13 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
-          GDRIVE_SA_JSON: ${{ secrets.GDRIVE_SA_JSON }}
+          GDRIVE_OAUTH_CLIENT_ID: ${{ secrets.GDRIVE_OAUTH_CLIENT_ID }}
+          GDRIVE_OAUTH_CLIENT_SECRET: ${{ secrets.GDRIVE_OAUTH_CLIENT_SECRET }}
+          GDRIVE_OAUTH_REFRESH_TOKEN: ${{ secrets.GDRIVE_OAUTH_REFRESH_TOKEN }}
+          GDRIVE_QUOTA_PROJECT: ${{ secrets.GDRIVE_QUOTA_PROJECT }}
           GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          SEARCH_API_KEY: ${{ secrets.SEARCH_API_KEY }}
           CONTENT_BANK_VIDEOS_DIR: ./data/videos
         run: |
           if [ "${{ inputs.dry_run }}" = "true" ]; then

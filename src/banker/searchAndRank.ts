@@ -1,13 +1,46 @@
 import { CASCADE_VIDEO_FILTER, callLlmCascade } from '../shared/llmFallback.js';
 import { log } from '../shared/logger.js';
+import { searchRedditVideos } from '../shared/reddit.js';
 import type { Theme } from '../shared/repositories.js';
-import { searchVideos, type SearchPlatform, type SearchResult } from '../shared/ytdlp.js';
+import { fetchByUrl, searchVideos, type SearchPlatform, type SearchResult } from '../shared/ytdlp.js';
 import {
   FilterResponseSchema,
   filterPrompt,
   filterResponseJsonSchema,
   type FilterResponse,
 } from './filterPrompt.js';
+
+const REDDIT_VIDEO_HITS = 3;
+
+/** Extract latin/brand tokens for English-language Reddit search (CN keywords won't match). */
+function latinQuery(theme: Theme): string {
+  const pool = [...theme.cn_keywords, theme.title].join(' ');
+  const tokens = pool.match(/[A-Za-z][A-Za-z0-9.+-]{1,}/g) ?? [];
+  const seen = new Set<string>();
+  const picked: string[] = [];
+  for (const t of tokens) {
+    const k = t.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    picked.push(t);
+    if (picked.length >= 4) break;
+  }
+  return picked.join(' ');
+}
+
+/** Search Reddit for theme-relevant video posts and resolve them to candidates. */
+async function collectRedditVideos(theme: Theme): Promise<SearchResult[]> {
+  const q = latinQuery(theme);
+  if (q.length < 3) return [];
+  const hits = await searchRedditVideos(q, { limit: 12 });
+  const out: SearchResult[] = [];
+  for (const hit of hits.slice(0, REDDIT_VIDEO_HITS)) {
+    const res = await fetchByUrl(hit.permalink);
+    if (res) out.push(res);
+  }
+  log('info', 'banker.reddit_videos', { theme_id: theme.id, query: q, resolved: out.length });
+  return out;
+}
 
 const MIN_DURATION_S = 15;
 const MAX_DURATION_S = 900;
@@ -156,6 +189,19 @@ export async function searchAcrossPlatforms(theme: Theme): Promise<RankedCandida
     }
   }
 
+  // Reddit is URL-based (no yt-dlp search target): search Reddit for video posts
+  // matching this theme's latin/brand tokens, then resolve each post via fetchByUrl.
+  if (process.env.REDDIT_VIDEOS_ENABLED !== 'false') {
+    try {
+      all.push(...(await collectRedditVideos(theme)));
+    } catch (e) {
+      log('warn', 'banker.reddit_videos.failed', {
+        theme_id: theme.id,
+        error: e instanceof Error ? e.message.slice(0, 200) : String(e),
+      });
+    }
+  }
+
   const deduped = dedupByVideoId(all);
   const prefiltered = deduped.filter(passesPrefilter);
   log('info', 'banker.search.summary', {
@@ -169,9 +215,14 @@ export async function searchAcrossPlatforms(theme: Theme): Promise<RankedCandida
     prefiltered
       .filter((c) => c.source_platform === platform)
       .sort((a, b) => b.view_count - a.view_count);
+  // URL-discovered sources (reddit/weibo/instagram) are already targeted, so keep them all.
+  const otherSources = prefiltered.filter(
+    (c) => !['bilibili', 'youtube'].includes(c.source_platform),
+  );
   const topByViews = [
     ...byViews('bilibili').slice(0, EVAL_TOP_BILIBILI),
     ...byViews('youtube').slice(0, EVAL_TOP_YOUTUBE),
+    ...otherSources,
   ];
 
   const evaluated: RankedCandidate[] = [];

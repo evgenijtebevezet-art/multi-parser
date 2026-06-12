@@ -31,7 +31,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS themes_title_uidx ON themes(title);
 CREATE TABLE IF NOT EXISTS candidates (
   id TEXT PRIMARY KEY,
   theme_id TEXT NOT NULL REFERENCES themes(id),
-  source_platform TEXT NOT NULL CHECK (source_platform IN ('bilibili', 'douyin', 'xiaohongshu', 'youtube')),
+  source_platform TEXT NOT NULL CHECK (source_platform IN ('bilibili', 'douyin', 'xiaohongshu', 'youtube', 'reddit', 'weibo', 'instagram')),
   source_url TEXT NOT NULL,
   source_video_id TEXT NOT NULL,
   title_original TEXT NOT NULL,
