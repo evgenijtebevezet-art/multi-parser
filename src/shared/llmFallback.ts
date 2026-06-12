@@ -9,7 +9,13 @@ export type ModelSpec = {
   model: string;
 };
 
-export type LlmTool = 'google_search' | 'url_context' | 'code_execution';
+export type LlmTool =
+  | 'googleSearch'
+  | 'urlContext'
+  | 'codeExecution'
+  | 'google_search'
+  | 'url_context'
+  | 'code_execution';
 
 export type LlmCall = {
   prompt: string;
@@ -33,14 +39,14 @@ export type LlmResult = {
 const DEFAULT_TIMEOUT_MS = 40_000;
 
 export const CASCADE_SCOUT: ModelSpec[] = [
-  { provider: 'gemini', model: 'gemini-3.1-flash-lite-preview' },
+  { provider: 'gemini', model: 'gemini-3.1-flash-lite' },
   { provider: 'gemini', model: 'gemini-3.5-flash' },
   { provider: 'gemini', model: 'gemini-flash-lite-latest' },
   { provider: 'groq', model: 'qwen/qwen3-32b' },
 ];
 
 export const CASCADE_VIDEO_FILTER: ModelSpec[] = [
-  { provider: 'gemini', model: 'gemini-3.1-flash-lite-preview' },
+  { provider: 'gemini', model: 'gemini-3.1-flash-lite' },
   { provider: 'gemini', model: 'gemini-3.5-flash' },
   { provider: 'nvidia', model: 'nvidia/cosmos-reason2-8b' },
 ];
@@ -104,6 +110,21 @@ function getGeminiClient(): GoogleGenAI {
 }
 
 type GenAiPart = { text: string } | { fileData: { fileUri: string; mimeType: string } };
+type GenAiTool = { googleSearch: Record<string, never> } | { urlContext: Record<string, never> } | { codeExecution: Record<string, never> };
+
+function toGeminiTool(tool: LlmTool): GenAiTool {
+  switch (tool) {
+    case 'googleSearch':
+    case 'google_search':
+      return { googleSearch: {} };
+    case 'urlContext':
+    case 'url_context':
+      return { urlContext: {} };
+    case 'codeExecution':
+    case 'code_execution':
+      return { codeExecution: {} };
+  }
+}
 
 async function callGemini(spec: ModelSpec, call: LlmCall): Promise<LlmResult> {
   const ai = getGeminiClient();
@@ -125,7 +146,7 @@ async function callGemini(spec: ModelSpec, call: LlmCall): Promise<LlmResult> {
   if (call.responseFormat === 'json') config.responseMimeType = 'application/json';
   if (call.jsonSchema) config.responseSchema = call.jsonSchema;
   if (call.tools && call.tools.length > 0) {
-    config.tools = call.tools.map((t) => ({ [t]: {} }));
+    config.tools = call.tools.map(toGeminiTool);
   }
   if (call.maxOutputTokens !== undefined) config.maxOutputTokens = call.maxOutputTokens;
   if (call.temperature !== undefined) config.temperature = call.temperature;

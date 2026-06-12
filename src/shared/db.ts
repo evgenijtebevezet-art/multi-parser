@@ -9,8 +9,8 @@ let client: Client | null = null;
 
 export function getDb(): Client {
   if (client) return client;
-  const url = env.TURSO_URL ?? 'file:./data/content-bank.db';
-  const authToken = env.TURSO_TOKEN;
+  const url = env.TURSO_URL?.trim() || 'file:./data/content-bank.db';
+  const authToken = env.TURSO_TOKEN?.trim() || undefined;
   client = createClient(authToken ? { url, authToken } : { url });
   return client;
 }

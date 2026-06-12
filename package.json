@@ -10,6 +10,7 @@
   "scripts": {
     "scout": "tsx src/scout/run.ts",
     "banker": "tsx src/banker/run.ts",
+    "status": "tsx src/scripts/status.ts",
     "init-db": "tsx src/scripts/initDb.ts",
     "seed": "tsx src/scripts/seedTheme.ts",
     "reader:demo": "tsx src/scripts/readerDemo.ts",
